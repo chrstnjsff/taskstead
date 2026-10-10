@@ -13,6 +13,7 @@ use std::{
 pub struct Runtime {
     pub socket: String,
     config: PathBuf,
+    socket_path: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -23,6 +24,16 @@ pub struct Pane {
 
 impl Runtime {
     pub fn new(store: &Store) -> Result<Self> {
+        let socket_path = std::env::var_os("TASKSTEAD_SOCKET").map(PathBuf::from);
+        if let Some(path) = &socket_path {
+            if !path.is_absolute() || !path.parent().is_some_and(Path::is_dir) {
+                bail!("TASKSTEAD_SOCKET must be an absolute path inside an existing directory");
+            }
+            let limit = if cfg!(target_os = "macos") { 103 } else { 107 };
+            if path.as_os_str().as_bytes().len() > limit {
+                bail!("TASKSTEAD_SOCKET is too long for a Unix socket; use a shorter directory");
+            }
+        }
         let digest = Sha256::digest(store.root.as_os_str().as_encoded_bytes());
         let socket = format!("taskstead-{:x}", digest);
         let config = store.root.join("tmux.conf");
@@ -36,17 +47,33 @@ impl Runtime {
                 return Err(error.into());
             }
         }
-        Ok(Self { socket, config })
+        Ok(Self {
+            socket,
+            config,
+            socket_path,
+        })
     }
 
     pub fn command(&self) -> Command {
         let mut command = Command::new("tmux");
+        if let Some(path) = &self.socket_path {
+            command.arg("-S").arg(path);
+        } else {
+            command.args(["-L", &self.socket]);
+        }
         command
-            .args(["-L", &self.socket, "-f"])
+            .arg("-f")
             .arg(&self.config)
             .env_remove("TMUX")
             .env_remove("TMUX_TMPDIR");
         command
+    }
+
+    pub fn location(&self) -> String {
+        match &self.socket_path {
+            Some(path) => format!("tmux -S {}", path.display()),
+            None => format!("tmux -L {}", self.socket),
+        }
     }
 
     fn checked(output: Output) -> Result<String> {
@@ -86,6 +113,9 @@ impl Runtime {
             );
         if let Ok(path) = std::env::var("PATH") {
             command.args(["-e", &format!("PATH={path}")].map(argument));
+        }
+        if let Some(path) = &self.socket_path {
+            command.args(["-e", &format!("TASKSTEAD_SOCKET={}", path.display())].map(argument));
         }
         command
             .args(["--", "/usr/bin/env", "--"])

@@ -100,6 +100,60 @@ impl Drop for Fixture {
     }
 }
 
+struct SocketGuard(PathBuf);
+
+impl Drop for SocketGuard {
+    fn drop(&mut self) {
+        let _ = Command::new("tmux")
+            .arg("-S")
+            .arg(&self.0)
+            .arg("kill-server")
+            .output();
+    }
+}
+
+#[test]
+fn explicit_socket_keeps_runtime_inside_the_selected_directory() {
+    let fixture = Fixture::new();
+    let directory = tempfile::tempdir_in("/tmp").unwrap();
+    let socket = SocketGuard(directory.path().join("runtime.sock"));
+    let run = |args: &[&str]| {
+        let output = fixture
+            .command()
+            .env("TASKSTEAD_SOCKET", &socket.0)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    };
+    run(&[
+        "new",
+        "private-socket",
+        "--in-place",
+        "--repo",
+        fixture.repo.to_str().unwrap(),
+        "--",
+        "/bin/sleep",
+        "60",
+    ]);
+    assert!(socket.0.exists());
+    let sessions: Vec<Session> = serde_json::from_slice(&run(&["list", "--json"]).stdout).unwrap();
+    assert_eq!(sessions[0].state, State::Running);
+    run(&["stop", "private-socket", "--yes"]);
+    let output = fixture
+        .command()
+        .env("TASKSTEAD_SOCKET", "relative.sock")
+        .arg("list")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+}
+
 #[test]
 fn isolated_process_survives_client_and_reports_exit() {
     let fixture = Fixture::new();

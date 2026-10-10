@@ -112,6 +112,9 @@ Use `--data-dir` or `TASKSTEAD_DATA_DIR` to select a different directory.
 All clients for a directory share one isolated tmux server and a locked, atomically replaced JSON registry.
 Existing tmux sessions and the user's tmux configuration are separate.
 The generated `tmux.conf` in the state directory controls this runtime.
+In a restricted environment, set `TASKSTEAD_SOCKET` to an absolute socket path inside an existing permitted directory.
+Keep the same socket setting for every client using that state directory.
+This keeps session communication within the permitted directory without disabling sandbox protections.
 
 Worktree isolation separates Git checkouts, not permissions or processes.
 Agents retain their normal permissions and approval behavior.

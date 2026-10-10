@@ -219,9 +219,9 @@ fn run() -> Result<()> {
                 }
             }
             println!(
-                "State:   {}\nRuntime: tmux -L {}\nTerminal: {}",
+                "State:   {}\nRuntime: {}\nTerminal: {}",
                 service.store.root.display(),
-                service.runtime.socket,
+                service.runtime.location(),
                 std::env::var("TERM_PROGRAM").unwrap_or_else(|_| "unknown".into())
             );
             service.store.lock().context("Registry check failed")?;
