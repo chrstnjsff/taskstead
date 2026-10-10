@@ -250,7 +250,7 @@ impl Service {
         self.refresh(&mut registry)?;
         let i = registry.find(query)?;
         if registry.sessions[i].state.active() {
-            bail!("Session is still running; attach to it intaskstead");
+            bail!("Session is still running; attach to it instead");
         }
         if !registry.sessions[i].directory.is_dir() {
             bail!("Session directory is missing; no files were recreated");

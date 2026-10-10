@@ -42,7 +42,7 @@ Changes in the original checkout are not copied into the new worktree.
 ./target/release/taskstead list --json
 ```
 
-Use `--in-place` to share an existing directory intaskstead of creating a Git worktree.
+Use `--in-place` to share an existing directory instead of creating a Git worktree.
 Custom commands are supported after `--`, with literal arguments and no implicit shell expansion.
 
 ```sh

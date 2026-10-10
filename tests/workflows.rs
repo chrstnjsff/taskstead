@@ -1,15 +1,45 @@
 use std::{
     fs,
+    io::{Read, Seek, SeekFrom},
     path::PathBuf,
     process::{Command, Output},
     thread,
     time::{Duration, Instant},
 };
 use taskstead::{
-    git,
     model::{Session, State},
     service::Service,
 };
+
+fn output(command: &mut Command) -> Output {
+    let mut stdout = tempfile::tempfile().unwrap();
+    let mut stderr = tempfile::tempfile().unwrap();
+    let status = command
+        .stdout(stdout.try_clone().unwrap())
+        .stderr(stderr.try_clone().unwrap())
+        .status()
+        .unwrap();
+    stdout.seek(SeekFrom::Start(0)).unwrap();
+    stderr.seek(SeekFrom::Start(0)).unwrap();
+    let mut result = Output {
+        status,
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+    };
+    stdout.read_to_end(&mut result.stdout).unwrap();
+    stderr.read_to_end(&mut result.stderr).unwrap();
+    result
+}
+
+fn git_run(directory: &std::path::Path, args: &[&str]) -> anyhow::Result<String> {
+    let result = output(Command::new("git").arg("-C").arg(directory).args(args));
+    anyhow::ensure!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    Ok(String::from_utf8(result.stdout)?)
+}
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -23,14 +53,14 @@ impl Fixture {
         let repo = root.path().join("project with spaces");
         let data = root.path().join("state");
         fs::create_dir(&repo).unwrap();
-        git::run(&repo, &["init", "-b", "main"]).unwrap();
-        git::run(&repo, &["config", "user.email", "test@example.invalid"]).unwrap();
-        git::run(&repo, &["config", "user.name", "Test"]).unwrap();
-        git::run(&repo, &["config", "commit.gpgsign", "false"]).unwrap();
-        git::run(&repo, &["config", "core.hooksPath", "/dev/null"]).unwrap();
+        git_run(&repo, &["init", "-b", "main"]).unwrap();
+        git_run(&repo, &["config", "user.email", "test@example.invalid"]).unwrap();
+        git_run(&repo, &["config", "user.name", "Test"]).unwrap();
+        git_run(&repo, &["config", "commit.gpgsign", "false"]).unwrap();
+        git_run(&repo, &["config", "core.hooksPath", "/dev/null"]).unwrap();
         fs::write(repo.join("tracked.txt"), "original\n").unwrap();
-        git::run(&repo, &["add", "."]).unwrap();
-        git::run(&repo, &["commit", "-m", "initial"]).unwrap();
+        git_run(&repo, &["add", "."]).unwrap();
+        git_run(&repo, &["commit", "-m", "initial"]).unwrap();
         Self { root, repo, data }
     }
 
@@ -45,7 +75,7 @@ impl Fixture {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        let output = self.command().args(args).output().unwrap();
+        let output = output(self.command().args(args));
         assert!(
             output.status.success(),
             "{}",
@@ -95,7 +125,7 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         if let Ok(service) = Service::open(self.data.clone()) {
-            let _ = service.runtime.command().arg("kill-server").output();
+            let _ = output(service.runtime.command().arg("kill-server"));
         }
     }
 }
@@ -104,11 +134,12 @@ struct SocketGuard(PathBuf);
 
 impl Drop for SocketGuard {
     fn drop(&mut self) {
-        let _ = Command::new("tmux")
-            .arg("-S")
-            .arg(&self.0)
-            .arg("kill-server")
-            .output();
+        let _ = output(
+            Command::new("tmux")
+                .arg("-S")
+                .arg(&self.0)
+                .arg("kill-server"),
+        );
     }
 }
 
@@ -118,12 +149,12 @@ fn explicit_socket_keeps_runtime_inside_the_selected_directory() {
     let directory = tempfile::tempdir_in("/tmp").unwrap();
     let socket = SocketGuard(directory.path().join("runtime.sock"));
     let run = |args: &[&str]| {
-        let output = fixture
-            .command()
-            .env("TASKSTEAD_SOCKET", &socket.0)
-            .args(args)
-            .output()
-            .unwrap();
+        let output = output(
+            fixture
+                .command()
+                .env("TASKSTEAD_SOCKET", &socket.0)
+                .args(args),
+        );
         assert!(
             output.status.success(),
             "{}",
@@ -145,12 +176,12 @@ fn explicit_socket_keeps_runtime_inside_the_selected_directory() {
     let sessions: Vec<Session> = serde_json::from_slice(&run(&["list", "--json"]).stdout).unwrap();
     assert_eq!(sessions[0].state, State::Running);
     run(&["stop", "private-socket", "--yes"]);
-    let output = fixture
-        .command()
-        .env("TASKSTEAD_SOCKET", "relative.sock")
-        .arg("list")
-        .output()
-        .unwrap();
+    let output = output(
+        fixture
+            .command()
+            .env("TASKSTEAD_SOCKET", "relative.sock")
+            .arg("list"),
+    );
     assert!(!output.status.success());
 }
 
@@ -178,7 +209,7 @@ fn isolated_process_survives_client_and_reports_exit() {
             .contains("agent output")
     );
     assert!(
-        git::run(
+        git_run(
             &fixture.repo,
             &["branch", "--list", session.branch.as_deref().unwrap()]
         )
@@ -257,13 +288,13 @@ fn explicit_events_prioritize_attention_and_reject_dead_sessions() {
     assert_eq!(sessions[0].detail, "Permission required");
     fixture.run(&["stop", "first", "--yes"]);
     assert!(
-        !fixture
-            .command()
-            .args(["event", "review", "--session", "first"])
-            .output()
-            .unwrap()
-            .status
-            .success()
+        !output(
+            fixture
+                .command()
+                .args(["event", "review", "--session", "first"])
+        )
+        .status
+        .success()
     );
     assert_eq!(
         fixture
@@ -280,7 +311,7 @@ fn explicit_events_prioritize_attention_and_reject_dead_sessions() {
 fn stop_requires_confirmation_and_keeps_worktree() {
     let fixture = Fixture::new();
     let session = fixture.start("keep", "sleep 60");
-    let output = fixture.command().args(["stop", "keep"]).output().unwrap();
+    let output = output(fixture.command().args(["stop", "keep"]));
     assert!(!output.status.success());
     assert_eq!(fixture.sessions()[0].state, State::Running);
     fs::write(session.directory.join("valuable.txt"), "keep me").unwrap();
@@ -327,8 +358,8 @@ fn diff_includes_committed_changes_and_names_untracked_files() {
         "committed agent change\n",
     )
     .unwrap();
-    git::run(&session.directory, &["add", "tracked.txt"]).unwrap();
-    git::run(&session.directory, &["commit", "-m", "change"]).unwrap();
+    git_run(&session.directory, &["add", "tracked.txt"]).unwrap();
+    git_run(&session.directory, &["commit", "-m", "change"]).unwrap();
     fs::write(session.directory.join("new.txt"), "new file").unwrap();
     let patch = String::from_utf8(fixture.run(&["diff", "review"]).stdout).unwrap();
     assert!(patch.contains("+committed agent change"));
@@ -364,44 +395,33 @@ fn concurrent_clients_do_not_lose_sessions() {
 fn invalid_requests_preserve_user_data() {
     let fixture = Fixture::new();
     assert!(
-        !fixture
-            .command()
-            .args(["new", "../escape", "--repo", fixture.repo.to_str().unwrap()])
-            .output()
-            .unwrap()
-            .status
-            .success()
+        !output(fixture.command().args([
+            "new",
+            "../escape",
+            "--repo",
+            fixture.repo.to_str().unwrap()
+        ]))
+        .status
+        .success()
     );
     fixture.start("unique", "sleep 60");
     assert!(
-        !fixture
-            .command()
-            .args([
-                "new",
-                "unique",
-                "--repo",
-                fixture.repo.to_str().unwrap(),
-                "--",
-                "/bin/sleep",
-                "60"
-            ])
-            .output()
-            .unwrap()
-            .status
-            .success()
+        !output(fixture.command().args([
+            "new",
+            "unique",
+            "--repo",
+            fixture.repo.to_str().unwrap(),
+            "--",
+            "/bin/sleep",
+            "60"
+        ]))
+        .status
+        .success()
     );
     let registry = fixture.data.join("sessions.json");
     let original = fs::read(&registry).unwrap();
     fs::write(&registry, b"broken").unwrap();
-    assert!(
-        !fixture
-            .command()
-            .arg("list")
-            .output()
-            .unwrap()
-            .status
-            .success()
-    );
+    assert!(!output(fixture.command().arg("list")).status.success());
     assert_eq!(fs::read(&registry).unwrap(), b"broken");
     fs::write(&registry, original).unwrap();
     assert_eq!(fixture.sessions().len(), 1);

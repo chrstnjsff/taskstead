@@ -37,7 +37,7 @@ enum Action {
         agent: Agent,
         #[arg(
             long,
-            help = "Use the project directory directly intaskstead of creating a worktree"
+            help = "Use the project directory directly instead of creating a worktree"
         )]
         in_place: bool,
         #[arg(long, help = "Immediately attach to the new session")]
