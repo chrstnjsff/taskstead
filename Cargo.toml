@@ -23,4 +23,3 @@ uuid = { version = "1.23", features = ["v4"] }
 [profile.release]
 lto = "thin"
 strip = true
-

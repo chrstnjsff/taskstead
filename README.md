@@ -130,4 +130,3 @@ They cover persistence after CLI exit, worktree isolation, exit status, literal 
 Only test-owned tmux servers and temporary directories are cleaned up.
 
 Native Ghostty verification also exercised opening a task, sending text to its process, detaching, creating a shell task through the form, marking it as needing input, and closing the dashboard without terminating sessions.
-
